@@ -1536,6 +1536,444 @@
 
         // Initialize app when page loads
         document.addEventListener('DOMContentLoaded', initApp);
+    // Add this to your German Vocab Tracker for immediate GitHub sync
+
+// Simple GitHub Gists sync using Personal Access Tokens
+class SimpleGitHubSync {
+    constructor() {
+        this.token = localStorage.getItem('github_pat');
+        this.gistId = localStorage.getItem('vocab_gist_id');
+        this.syncEnabled = !!this.token;
+        this.lastSyncTime = localStorage.getItem('last_sync_time');
+    }
+
+    // Setup with Personal Access Token
+    async setupSync(token) {
+        this.token = token;
+        localStorage.setItem('github_pat', token);
+        
+        // Test the token
+        const isValid = await this.testToken();
+        if (isValid) {
+            this.syncEnabled = true;
+            this.showStatus('✅ GitHub sync enabled!');
+            await this.initialSync();
+            return true;
+        } else {
+            this.showStatus('❌ Invalid token');
+            return false;
+        }
+    }
+
+    // Test if token is valid
+    async testToken() {
+        try {
+            const response = await fetch('https://api.github.com/user', {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'User-Agent': 'German-Vocab-Tracker'
+                }
+            });
+            return response.ok;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    // Save data to GitHub Gist
+    async saveToGist() {
+        if (!this.syncEnabled) return false;
+
+        const data = {
+            vocabulary: [...vocabulary],
+            lookupHistory: [...lookupHistory],
+            textLibrary: [...textLibrary],
+            readCounts: [...readCounts],
+            readingGoals: [...readingGoals],
+            darkMode: darkMode,
+            lastSync: new Date().toISOString(),
+            version: 1
+        };
+
+        const gistData = {
+            description: "German Vocabulary Tracker - Auto Sync",
+            public: false,
+            files: {
+                "vocab-data.json": {
+                    content: JSON.stringify(data, null, 2)
+                },
+                "README.md": {
+                    content: `# German Vocabulary Tracker Data\n\nLast updated: ${new Date().toLocaleString()}\n\nThis gist contains your vocabulary learning data from the German Vocab Tracker.\n\n- Vocabulary words: ${data.vocabulary.length}\n- Texts in library: ${data.textLibrary.length}\n- Words looked up: ${data.lookupHistory.length}`
+                }
+            }
+        };
+
+        try {
+            const url = this.gistId 
+                ? `https://api.github.com/gists/${this.gistId}`
+                : 'https://api.github.com/gists';
+            
+            const method = this.gistId ? 'PATCH' : 'POST';
+
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'German-Vocab-Tracker'
+                },
+                body: JSON.stringify(gistData)
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                this.gistId = result.id;
+                localStorage.setItem('vocab_gist_id', this.gistId);
+                localStorage.setItem('last_sync_time', new Date().toISOString());
+                this.showStatus('☁️ Synced to GitHub');
+                return true;
+            } else {
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Sync error:', error);
+            this.showStatus('❌ Sync failed - Check internet connection');
+            return false;
+        }
+    }
+
+    // Load data from GitHub Gist
+    async loadFromGist() {
+        if (!this.syncEnabled || !this.gistId) return false;
+
+        try {
+            const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'User-Agent': 'German-Vocab-Tracker'
+                }
+            });
+
+            if (response.ok) {
+                const gist = await response.json();
+                const fileContent = gist.files['vocab-data.json']?.content;
+                
+                if (fileContent) {
+                    const data = JSON.parse(fileContent);
+                    
+                    // Check if remote data is newer
+                    const remoteSync = new Date(data.lastSync || 0);
+                    const localSync = new Date(localStorage.getItem('last_sync_time') || 0);
+                    
+                    if (remoteSync > localSync) {
+                        // Load remote data
+                        if (data.vocabulary) vocabulary = new Map(data.vocabulary);
+                        if (data.lookupHistory) lookupHistory = new Map(data.lookupHistory);
+                        if (data.textLibrary) textLibrary = new Map(data.textLibrary);
+                        if (data.readCounts) readCounts = new Map(data.readCounts);
+                        if (data.readingGoals) readingGoals = new Map(data.readingGoals);
+                        if (data.darkMode !== undefined) {
+                            darkMode = data.darkMode;
+                            document.body.classList.toggle('dark', darkMode);
+                            document.querySelector('.dark-toggle').textContent = darkMode ? '☀️' : '🌙';
+                        }
+
+                        // Save locally and update UI
+                        saveData();
+                        updateVocabDisplay();
+                        updateStatsDisplay();
+                        updateLibraryDisplay();
+                        
+                        localStorage.setItem('last_sync_time', data.lastSync);
+                        this.showStatus('📥 Updated from GitHub');
+                        return true;
+                    } else {
+                        this.showStatus('✅ Already up to date');
+                        return true;
+                    }
+                }
+            } else {
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Load error:', error);
+            this.showStatus('❌ Failed to load from GitHub');
+        }
+        return false;
+    }
+
+    // Automatic sync on changes
+    setupAutoSync() {
+        if (!this.syncEnabled) return;
+
+        let syncTimeout;
+        const debouncedSync = () => {
+            clearTimeout(syncTimeout);
+            syncTimeout = setTimeout(async () => {
+                await this.saveToGist();
+            }, 3000); // Sync 3 seconds after last change
+        };
+
+        // Override saveData to trigger auto-sync
+        const originalSaveData = window.saveData;
+        window.saveData = () => {
+            originalSaveData();
+            if (this.syncEnabled) {
+                debouncedSync();
+            }
+        };
+    }
+
+    // Initial sync (load then save)
+    async initialSync() {
+        this.showStatus('🔄 Initial sync...');
+        
+        // Try to load existing data first
+        const loaded = await this.loadFromGist();
+        
+        // If no existing data, save current data
+        if (!loaded) {
+            await this.saveToGist();
+        }
+        
+        // Setup auto-sync
+        this.setupAutoSync();
+    }
+
+    // Manual sync
+    async syncNow() {
+        if (!this.syncEnabled) {
+            this.showSetupDialog();
+            return;
+        }
+
+        this.showStatus('🔄 Syncing...');
+        
+        // Load latest data first, then save
+        await this.loadFromGist();
+        await this.saveToGist();
+    }
+
+    // Show status message
+    showStatus(message) {
+        // Remove existing status
+        const existing = document.getElementById('sync-status');
+        if (existing) existing.remove();
+
+        // Create status element
+        const status = document.createElement('div');
+        status.id = 'sync-status';
+        status.textContent = message;
+        status.style.cssText = `
+            position: fixed;
+            top: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: ${message.includes('✅') || message.includes('☁️') ? '#10b981' : message.includes('❌') ? '#ef4444' : '#3b82f6'};
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 2rem;
+            font-size: 0.9rem;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            animation: slideDown 0.3s ease-out;
+        `;
+
+        document.body.appendChild(status);
+
+        // Remove after 3 seconds
+        setTimeout(() => {
+            if (status.parentNode) {
+                status.style.animation = 'slideUp 0.3s ease-out';
+                setTimeout(() => {
+                    if (status.parentNode) status.parentNode.removeChild(status);
+                }, 300);
+            }
+        }, 3000);
+    }
+
+    // Show setup dialog
+    showSetupDialog() {
+        const existingDialog = document.getElementById('sync-setup-dialog');
+        if (existingDialog) return;
+
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 2000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+
+        const dialog = document.createElement('div');
+        dialog.id = 'sync-setup-dialog';
+        dialog.style.cssText = `
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
+        `;
+
+        dialog.innerHTML = `
+            <h3 style="margin-bottom: 1rem; color: #374151;">Setup GitHub Sync</h3>
+            <p style="margin-bottom: 1rem; color: #6b7280; line-height: 1.6;">
+                To sync your vocabulary data across devices, you'll need a GitHub Personal Access Token.
+            </p>
+            <ol style="margin-bottom: 1.5rem; color: #6b7280; line-height: 1.6; padding-left: 1.5rem;">
+                <li>Go to <a href="https://github.com/settings/tokens" target="_blank" style="color: #3b82f6;">GitHub Settings → Developer settings → Personal access tokens</a></li>
+                <li>Click "Generate new token (classic)"</li>
+                <li>Give it a name like "German Vocab Tracker"</li>
+                <li>Select the <strong>"gist"</strong> scope only</li>
+                <li>Click "Generate token" and copy it</li>
+            </ol>
+            <input type="password" id="github-token-input" placeholder="Paste your GitHub token here..." style="width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 0.5rem; margin-bottom: 1rem;">
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                <button onclick="closeSetupDialog()" style="padding: 0.75rem 1.5rem; border: 1px solid #d1d5db; border-radius: 0.5rem; background: white; cursor: pointer;">Cancel</button>
+                <button onclick="submitToken()" style="padding: 0.75rem 1.5rem; border: none; border-radius: 0.5rem; background: #3b82f6; color: white; cursor: pointer;">Connect</button>
+            </div>
+        `;
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        // Focus the input
+        setTimeout(() => {
+            document.getElementById('github-token-input').focus();
+        }, 100);
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+            }
+        });
+
+        // Submit on Enter
+        document.getElementById('github-token-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                submitToken();
+            }
+        });
+
+        // Global functions for dialog
+        window.closeSetupDialog = () => overlay.remove();
+        window.submitToken = async () => {
+            const token = document.getElementById('github-token-input').value.trim();
+            if (token) {
+                const success = await sync.setupSync(token);
+                if (success) {
+                    overlay.remove();
+                    updateSyncUI();
+                }
+            }
+        };
+    }
+
+    // Disconnect sync
+    disconnect() {
+        localStorage.removeItem('github_pat');
+        localStorage.removeItem('vocab_gist_id');
+        localStorage.removeItem('last_sync_time');
+        this.token = null;
+        this.gistId = null;
+        this.syncEnabled = false;
+        this.showStatus('🔌 Sync disconnected');
+        updateSyncUI();
+    }
+
+    // Get sync info
+    getSyncInfo() {
+        if (!this.syncEnabled) return null;
+        
+        return {
+            enabled: true,
+            lastSync: this.lastSyncTime ? new Date(this.lastSyncTime).toLocaleString() : 'Never',
+            gistUrl: this.gistId ? `https://gist.github.com/${this.gistId}` : null
+        };
+    }
+}
+
+// Initialize sync
+const sync = new SimpleGitHubSync();
+
+// Add sync UI
+function updateSyncUI() {
+    // Remove existing sync UI
+    const existing = document.getElementById('sync-ui');
+    if (existing) existing.remove();
+
+    // Create sync UI
+    const syncUI = document.createElement('div');
+    syncUI.id = 'sync-ui';
+    syncUI.style.cssText = `
+        position: fixed;
+        bottom: 1rem;
+        right: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        z-index: 1000;
+    `;
+
+    if (sync.syncEnabled) {
+        const info = sync.getSyncInfo();
+        syncUI.innerHTML = `
+            <div style="background: white; padding: 0.75rem; border-radius: 0.5rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); font-size: 0.8rem; color: #6b7280; min-width: 200px;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="color: #10b981;">●</span>
+                    <strong style="color: #374151;">GitHub Sync Active</strong>
+                </div>
+                <div>Last sync: ${info.lastSync}</div>
+                ${info.gistUrl ? `<a href="${info.gistUrl}" target="_blank" style="color: #3b82f6; text-decoration: none; font-size: 0.7rem;">View on GitHub →</a>` : ''}
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button onclick="sync.syncNow()" style="padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-size: 0.9rem;">🔄 Sync</button>
+                <button onclick="sync.disconnect()" style="padding: 0.5rem 1rem; background: #6b7280; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-size: 0.9rem;">Disconnect</button>
+            </div>
+        `;
+    } else {
+        syncUI.innerHTML = `
+            <button onclick="sync.showSetupDialog()" style="padding: 0.75rem 1.5rem; background: #10b981; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-size: 0.9rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                📡 Setup Device Sync
+            </button>
+        `;
+    }
+
+    document.body.appendChild(syncUI);
+}
+
+// Add CSS animations
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideDown {
+        from { transform: translate(-50%, -100%); opacity: 0; }
+        to { transform: translate(-50%, 0); opacity: 1; }
+    }
+    @keyframes slideUp {
+        from { transform: translate(-50%, 0); opacity: 1; }
+        to { transform: translate(-50%, -100%); opacity: 0; }
+    }
+`;
+document.head.appendChild(style);
+
+// Initialize sync UI and auto-sync when app loads
+function initializeSync() {
+    updateSyncUI();
+    
+    if (sync.syncEnabled) {
+        // Load latest data on app start
+        sync.loadFromGist();
+        sync.setupAutoSync();
+    }
+}
+
+// Call this after your existing initApp()
+setTimeout(initializeSync, 500);
     </script>
 </body>
 </html>
