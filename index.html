@@ -1535,7 +1535,10 @@
         }
 
         // Initialize app when page loads
-        document.addEventListener('DOMContentLoaded', initApp);
+        document.addEventListener('DOMContentLoaded', () => {
+    initApp();
+    initializeSync(); // Add sync functionality
+});
     // Add this to your German Vocab Tracker for immediate GitHub sync
 
 // Simple GitHub Gists sync using Personal Access Tokens
